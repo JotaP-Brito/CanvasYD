@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Focus dashboard</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #101416; color: #f6f7f2; }
+    main { width: min(680px, 100%); margin: auto; padding: 28px 18px 64px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+    h1 { margin: 0; font-size: clamp(2rem, 9vw, 4rem); letter-spacing: -.06em; }
+    header p { margin: 0 0 9px; color: #8f9a9e; }
+    form { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; margin: 30px 0; }
+    input, button { border: 0; border-radius: 12px; font: inherit; }
+    input { min-width: 0; padding: 15px 16px; color: inherit; background: #1b2225; outline: 1px solid #283237; }
+    button { padding: 0 20px; color: #071512; background: #65e6bd; font-weight: 750; cursor: pointer; }
+    button:active { transform: translateY(1px); }
+    ul { display: grid; gap: 10px; padding: 0; list-style: none; }
+    li { display: grid; grid-template-columns: auto 1fr auto; gap: 13px; align-items: center; padding: 15px; border-radius: 14px; background: #1b2225; }
+    .dot { width: 9px; height: 34px; border-radius: 9px; background: #65e6bd; }
+    .title { font-weight: 700; }
+    .meta { margin-top: 4px; color: #8f9a9e; font-size: .85rem; }
+    .done { padding: 9px 12px; color: #cdd4d6; background: #2a3438; font-size: .82rem; }
+    .empty { display: block; padding: 48px 20px; text-align: center; color: #8f9a9e; }
+    #message { min-height: 1.4em; color: #ff8f70; }
+    @media (max-width: 480px) { header { display: block; } form { grid-template-columns: 1fr; } form button { padding: 14px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>Focus</h1><p>Personal tasks for your CYD</p></header>
+    <form id="form">
+      <input id="title" maxlength="160" autocomplete="off" placeholder="What needs doing?" required>
+      <input id="due" type="datetime-local" aria-label="Due date and time">
+      <button>Add task</button>
+    </form>
+    <p id="message" role="status"></p>
+    <ul id="todos"></ul>
+  </main>
+  <script>
+    const list = document.querySelector('#todos');
+    const message = document.querySelector('#message');
+    const escapeHtml = value => value.replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+    async function request(url, options) {
+      const response = await fetch(url, options);
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      return body;
+    }
+    async function refresh() {
+      try {
+        const todos = (await request('/api/todos')).filter(todo => !todo.completed);
+        list.innerHTML = todos.length ? todos.map(todo => `
+          <li><span class="dot"></span><div><div class="title">${escapeHtml(todo.title)}</div>
+          <div class="meta">${todo.due_at ? `Due ${new Date(todo.due_at).toLocaleString()}` : 'No due date'}</div></div>
+          <button class="done" data-id="${todo.id}">Done</button></li>`).join('')
+          : '<li class="empty">Nothing on your personal list.</li>';
+      } catch (error) { message.textContent = error.message; }
+    }
+    document.querySelector('#form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const input = document.querySelector('#title');
+      const due = document.querySelector('#due');
+      message.textContent = '';
+      try {
+        await request('/api/todos', {method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({title: input.value, due_at: due.value ? new Date(due.value).toISOString() : null})});
+        input.value = '';
+        due.value = '';
+        await refresh();
+      } catch (error) { message.textContent = error.message; }
+    });
+    list.addEventListener('click', async event => {
+      const button = event.target.closest('[data-id]');
+      if (!button) return;
+      try {
+        await request(`/api/todos/${button.dataset.id}/toggle`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+        await refresh();
+      } catch (error) { message.textContent = error.message; }
+    });
+    refresh();
+  </script>
+</body>
+</html>

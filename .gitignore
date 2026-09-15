@@ -1,0 +1,8 @@
+.pio/
+.vscode/
+include/secrets.h
+bridge/.env
+bridge/todos.json
+__pycache__/
+*.pyc
+

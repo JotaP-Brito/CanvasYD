@@ -1,0 +1,10 @@
+[
+  {
+    "id": "example-task",
+    "title": "Pack gym clothes",
+    "due_at": "2030-01-15T07:30:00-07:00",
+    "completed": false,
+    "created_at": "2030-01-14T18:00:00-07:00"
+  }
+]
+
