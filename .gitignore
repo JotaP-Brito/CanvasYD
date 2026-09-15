@@ -1,8 +1,39 @@
 .pio/
-.vscode/
+.venv/
+venv/
+
 include/secrets.h
 bridge/.env
 bridge/todos.json
+bridge/local.settings.json
+bridge/.venv/
+bridge/.python_packages/
 __pycache__/
 *.pyc
+.pytest_cache/
 
+# Environment files are private by default; sanitized examples remain tracked.
+.env
+.env.*
+!.env.example
+!**/.env.example
+**/local.settings.json
+**/secrets.h
+
+# Private keys, deployment state, and local infrastructure state.
+*.key
+*.pem
+*.pfx
+*.p12
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Generated editor and local Azurite state.
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch/
+AzuriteConfig
+__azurite_db_*.json
+__blobstorage__/
+__queuestorage__/

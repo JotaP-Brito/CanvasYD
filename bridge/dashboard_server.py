@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import json
+import hmac
+import logging
 import os
 import re
+import secrets
 import socket
 import threading
 import time
@@ -24,6 +27,53 @@ ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
 TODOS_PATH = ROOT / "todos.json"
 TODO_ROUTE = re.compile(r"^/api/todos/([a-zA-Z0-9-]+)/toggle$")
+
+
+def render_home() -> tuple[str, str]:
+    """Render the web UI with a per-response Content Security Policy nonce."""
+    nonce = secrets.token_urlsafe(18)
+    html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
+    html = html.replace("__CSP_NONCE__", nonce)
+    policy = (
+        "default-src 'none'; "
+        f"script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; "
+        "connect-src 'self'; base-uri 'none'; form-action 'self'; "
+        "frame-ancestors 'none'"
+    )
+    return html, policy
+
+
+def _url_origin(url: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        if not parsed.scheme or not parsed.hostname:
+            return None
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+        return parsed.scheme.lower(), parsed.hostname.lower(), port
+    except ValueError:
+        return None
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self, allowed_origin: tuple[str, str, int] | None) -> None:
+        super().__init__()
+        self.allowed_origin = allowed_origin
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        target = urllib.parse.urljoin(req.full_url, newurl)
+        if _url_origin(target) != self.allowed_origin:
+            raise urllib.error.HTTPError(
+                req.full_url, code, "Canvas redirect changed API origin", headers, fp
+            )
+        return super().redirect_request(req, fp, code, msg, headers, target)
 
 
 def load_dotenv(path: Path) -> None:
@@ -117,6 +167,22 @@ class CanvasClient:
         self.cached_at = 0.0
         self.cached_items: list[dict[str, Any]] = []
         self.lock = threading.Lock()
+        self.base_origin = self._origin(self.base_url) if self.base_url else None
+        if self.base_url and (
+            self.base_origin is None or self.base_origin[0] != "https"
+        ):
+            raise ValueError("CANVAS_BASE_URL must be a valid HTTPS URL")
+        self.opener = urllib.request.build_opener(
+            _SameOriginRedirectHandler(self.base_origin)
+        )
+
+    @staticmethod
+    def _origin(url: str) -> tuple[str, str, int] | None:
+        return _url_origin(url)
+
+    def _require_same_origin(self, url: str) -> None:
+        if self._origin(url) != self.base_origin:
+            raise ValueError("Canvas response attempted to change API origin")
 
     @property
     def configured(self) -> bool:
@@ -134,12 +200,13 @@ class CanvasClient:
         url = f"{self.base_url}{path}?{urllib.parse.urlencode(params)}"
         results: list[Any] = []
         while url:
+            self._require_same_origin(url)
             request = urllib.request.Request(url, headers={
                 "Authorization": f"Bearer {self.token}",
                 "Accept": "application/json+canvas-string-ids",
                 "User-Agent": "CYD-Focus-Dashboard/1.0",
             })
-            with urllib.request.urlopen(request, timeout=12) as response:
+            with self.opener.open(request, timeout=12) as response:
                 payload = json.load(response)
                 results.extend(payload if isinstance(payload, list) else [payload])
                 url = self._next_link(response.headers.get("Link", ""))
@@ -241,7 +308,18 @@ class RequestHandler(SimpleHTTPRequestHandler):
         return self.server  # type: ignore[return-value]
 
     def _authorized(self) -> bool:
-        return not self.app.api_key or self.headers.get("X-API-Key", "") == self.app.api_key
+        supplied = self.headers.get("X-API-Key", "")
+        return bool(self.app.api_key and supplied) and hmac.compare_digest(
+            supplied, self.app.api_key
+        )
+
+    def end_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        super().end_headers()
 
     def _json(self, value: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(value, ensure_ascii=True).encode("utf-8")
@@ -253,13 +331,25 @@ class RequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_json(self) -> dict[str, Any]:
-        length = min(int(self.headers.get("Content-Length", "0")), 16_384)
+        length = int(self.headers.get("Content-Length", "0"))
+        if length < 0 or length > 16_384:
+            raise ValueError("request body must be 16 KB or less")
         return json.loads(self.rfile.read(length) or b"{}")
 
     def do_GET(self) -> None:  # noqa: N802
         path = urllib.parse.urlparse(self.path).path
-        if path == "/health":
-            self._json({"ok": True, "canvas_configured": self.app.service.canvas.configured})
+        if path in {"/", "/index.html"}:
+            body_text, policy = render_home()
+            body = body_text.encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Security-Policy", policy)
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/health":
+            self._json({"ok": True})
         elif path == "/api/dashboard":
             if not self._authorized():
                 self._json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
@@ -267,14 +357,21 @@ class RequestHandler(SimpleHTTPRequestHandler):
             try:
                 self._json(self.app.service.build())
             except (urllib.error.URLError, TimeoutError, ValueError) as error:
-                self._json({"error": f"Canvas request failed: {error}"}, HTTPStatus.BAD_GATEWAY)
+                logging.warning("Canvas request failed: %s", type(error).__name__)
+                self._json({"error": "Canvas service unavailable"}, HTTPStatus.BAD_GATEWAY)
         elif path == "/api/todos":
+            if not self._authorized():
+                self._json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+                return
             self._json(self.app.service.todos.list())
         else:
             super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802
         path = urllib.parse.urlparse(self.path).path
+        if not self._authorized():
+            self._json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+            return
         try:
             payload = self._read_json()
             if path == "/api/todos":

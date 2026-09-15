@@ -1,0 +1,16 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "CANVAS_BASE_URL": "https://school.instructure.com",
+    "CANVAS_TOKEN": "paste-token-here",
+    "DASHBOARD_API_KEY": "change-this-key",
+    "DASHBOARD_TIMEZONE": "America/Denver",
+    "CANVAS_CACHE_SECONDS": "300",
+    "CANVAS_LOOKAHEAD_DAYS": "45",
+    "TODO_STORAGE_CONNECTION_STRING": "UseDevelopmentStorage=true",
+    "TODO_TABLE_NAME": "Todos",
+    "DEMO_MODE": "1"
+  }
+}

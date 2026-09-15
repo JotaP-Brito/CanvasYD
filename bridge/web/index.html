@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Focus dashboard</title>
-  <style>
+  <style nonce="__CSP_NONCE__">
     :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; background: #101416; color: #f6f7f2; }
@@ -13,6 +13,7 @@
     h1 { margin: 0; font-size: clamp(2rem, 9vw, 4rem); letter-spacing: -.06em; }
     header p { margin: 0 0 9px; color: #8f9a9e; }
     form { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; margin: 30px 0; }
+    #settings { grid-template-columns: 1fr auto; margin: 20px 0 0; }
     input, button { border: 0; border-radius: 12px; font: inherit; }
     input { min-width: 0; padding: 15px 16px; color: inherit; background: #1b2225; outline: 1px solid #283237; }
     button { padding: 0 20px; color: #071512; background: #65e6bd; font-weight: 750; cursor: pointer; }
@@ -25,12 +26,16 @@
     .done { padding: 9px 12px; color: #cdd4d6; background: #2a3438; font-size: .82rem; }
     .empty { display: block; padding: 48px 20px; text-align: center; color: #8f9a9e; }
     #message { min-height: 1.4em; color: #ff8f70; }
-    @media (max-width: 480px) { header { display: block; } form { grid-template-columns: 1fr; } form button { padding: 14px; } }
+    @media (max-width: 480px) { header { display: block; } form { grid-template-columns: 1fr; } form button { padding: 14px; } #settings { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <main>
     <header><h1>Focus</h1><p>Personal tasks for your CYD</p></header>
+    <form id="settings">
+      <input id="api-key" type="password" autocomplete="off" placeholder="Dashboard API key" required>
+      <button>Save key</button>
+    </form>
     <form id="form">
       <input id="title" maxlength="160" autocomplete="off" placeholder="What needs doing?" required>
       <input id="due" type="datetime-local" aria-label="Due date and time">
@@ -39,23 +44,35 @@
     <p id="message" role="status"></p>
     <ul id="todos"></ul>
   </main>
-  <script>
+  <script nonce="__CSP_NONCE__">
     const list = document.querySelector('#todos');
     const message = document.querySelector('#message');
+    const keyInput = document.querySelector('#api-key');
+    keyInput.value = sessionStorage.getItem('dashboardApiKey') || '';
     const escapeHtml = value => value.replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
-    async function request(url, options) {
-      const response = await fetch(url, options);
+    async function request(url, options = {}) {
+      const apiKey = sessionStorage.getItem('dashboardApiKey');
+      if (!apiKey) throw new Error('Enter and save the dashboard API key first.');
+      const headers = new Headers(options.headers || {});
+      headers.set('X-API-Key', apiKey);
+      const response = await fetch(url, {...options, headers});
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
       return body;
     }
+    document.querySelector('#settings').addEventListener('submit', async event => {
+      event.preventDefault();
+      sessionStorage.setItem('dashboardApiKey', keyInput.value.trim());
+      message.textContent = '';
+      await refresh();
+    });
     async function refresh() {
       try {
         const todos = (await request('/api/todos')).filter(todo => !todo.completed);
         list.innerHTML = todos.length ? todos.map(todo => `
           <li><span class="dot"></span><div><div class="title">${escapeHtml(todo.title)}</div>
           <div class="meta">${todo.due_at ? `Due ${new Date(todo.due_at).toLocaleString()}` : 'No due date'}</div></div>
-          <button class="done" data-id="${todo.id}">Done</button></li>`).join('')
+          <button class="done" data-id="${escapeHtml(String(todo.id))}">Done</button></li>`).join('')
           : '<li class="empty">Nothing on your personal list.</li>';
       } catch (error) { message.textContent = error.message; }
     }
@@ -80,7 +97,8 @@
         await refresh();
       } catch (error) { message.textContent = error.message; }
     });
-    refresh();
+    if (keyInput.value) refresh();
+    else message.textContent = 'Enter the dashboard API key to load personal tasks.';
   </script>
 </body>
 </html>
